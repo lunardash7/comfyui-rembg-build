@@ -1,27 +1,28 @@
-# 1. 안정적인 공식 PyTorch 이미지를 베이스로 사용
-FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+# 1. 가장 가볍고 안정적인 순정 파이썬 3.10 환경
+FROM python:3.10-slim
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 2. 필수 시스템 패키지 설치 (rembg 구동용 libgl1-mesa-glx 포함)
+# 2. 필수 시스템 패키지 설치
 RUN apt-get update && apt-get install -y \
-    git wget libgl1-mesa-glx libglib2.0-0 \
+    git wget libgl1-mesa-glx libglib2.0-0 build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-# 3. ComfyUI 최신 버전 원본 가져오기
+# 3. 최신 PyTorch (CUDA 12.1 호환) 직접 설치 (여기서 AttributeError 해결)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# 4. ComfyUI 원본 가져오기
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git .
 
-# 4. ComfyUI 기본 요구사항 및 런팟/rembg 패키지 한 번에 설치
+# 5. 필수 패키지 설치 및 NumPy 다운그레이드 (여기서 NumPy 충돌 해결)
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu
+RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu "numpy<2"
 
-# ComfyUI용 Rembg 커스텀 노드 다운로드
+# 6. Rembg 커스텀 노드 다운로드 (배경 제거 플러그인)
 RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
 
-# 5. 방금 만든 서버리스 핸들러 파일을 컨테이너 안으로 복사
+# 7. 핸들러 복사 및 실행
 COPY rp_handler.py /workspace/rp_handler.py
-
-# 6. 컨테이너가 켜질 때 핸들러 실행
 CMD ["python", "rp_handler.py"]
