@@ -1,111 +1,31 @@
-import runpod
-import subprocess
-import requests
-import time
-import base64
-import os
-import shutil
+FROM ubuntu:22.04
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
 
-COMFY_DIR = "/workspace"
-INPUT_DIR = os.path.join(COMFY_DIR, "input")
-OUTPUT_DIR = os.path.join(COMFY_DIR, "output")
+# 1. 안정적인 우분투 공식 저장소를 통해 필수 패키지 및 파이썬 3.10 설치
+RUN apt-get update && apt-get install -y \
+    python3.10 python3-pip python3.10-venv \
+    git wget libgl1-mesa-glx libglib2.0-0 build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# 1. 런팟 네트워크 볼륨(/runpod-volume) 자동 감지 및 모델 폴더 연결(심볼릭 링크)
-RUNPOD_VOL = "/runpod-volume"
-if os.path.exists(RUNPOD_VOL):
-    vol_models = os.path.join(RUNPOD_VOL, "models")
-    comfy_models = os.path.join(COMFY_DIR, "models")
-    
-    if os.path.exists(vol_models):
-        if os.path.exists(comfy_models) and not os.path.islink(comfy_models):
-            shutil.rmtree(comfy_models)
-        if not os.path.exists(comfy_models):
-            os.symlink(vol_models, comfy_models)
+# 파이썬 명령어를 python3.10으로 연결
+RUN ln -s /usr/bin/python3.10 /usr/bin/python
 
-# 2. ComfyUI 백그라운드 실행 및 로그 기록
-out_log = open("comfy.log", "w")
-err_log = open("comfy_error.log", "w")
+WORKDIR /workspace
 
-comfy_process = subprocess.Popen(
-    ["python", "main.py", "--port", "8188", "--listen", "0.0.0.0"],
-    cwd=COMFY_DIR,
-    stdout=out_log,
-    stderr=err_log
-)
+# 2. 최신 PyTorch (CUDA 12.1 호환) 직접 설치 (여기서 이전의 AttributeError 해결)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-def handler(event):
-    if comfy_process.poll() is not None:
-        with open("comfy_error.log", "r") as f:
-            return {"error": "ComfyUI Server Crashed", "details": f.read()}
+# 3. ComfyUI 원본 가져오기
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git .
 
-    server_ready = False
-    for _ in range(120):
-        try:
-            if requests.get("http://127.0.0.1:8188/").status_code == 200:
-                server_ready = True
-                break
-        except:
-            time.sleep(1)
+# 4. 필수 패키지 설치 및 NumPy 다운그레이드 (여기서 이전의 NumPy 충돌 해결)
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu "numpy<2"
 
-    if not server_ready:
-        with open("comfy_error.log", "r") as f:
-            return {"error": "ComfyUI Startup Timeout", "details": f.read()}
+# 5. Rembg 커스텀 노드 다운로드 (배경 제거 플러그인)
+RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
 
-    job_input = event.get("input", {})
-    workflow = job_input.get("workflow")
-    if not workflow:
-        return {"error": "No workflow provided in the input"}
-
-    os.makedirs(INPUT_DIR, exist_ok=True)
-    for img_data in job_input.get("images", []):
-        name = img_data.get("name")
-        b64 = img_data.get("image")
-        if name and b64:
-            with open(os.path.join(INPUT_DIR, name), "wb") as f:
-                f.write(base64.b64decode(b64))
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    for f in os.listdir(OUTPUT_DIR):
-        file_path = os.path.join(OUTPUT_DIR, f)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-
-    try:
-        submit_res = requests.post("http://127.0.0.1:8188/prompt", json={"prompt": workflow}).json()
-        
-        # 3. 모델/노드 누락으로 작업이 거부되었을 때, ComfyUI의 내부 로그를 긁어서 PHP로 반환!
-        if "error" in submit_res:
-            with open("comfy.log", "r") as f:
-                server_log = f.read()[-3000:] # 에러가 발생한 마지막 내역 읽기
-                
-            installed_nodes = os.listdir(os.path.join(COMFY_DIR, "custom_nodes"))
-            
-            return {
-                "error": "ComfyUI rejected the workflow", 
-                "details": submit_res,
-                "installed_nodes_check": installed_nodes, # 덮어쓰기 여부 확인용
-                "server_log": server_log # 노드 로드 실패의 진짜 원인
-            }
-            
-        prompt_id = submit_res.get("prompt_id")
-        while True:
-            history_res = requests.get(f"http://127.0.0.1:8188/history/{prompt_id}").json()
-            if prompt_id in history_res:
-                break
-            time.sleep(1.5)
-
-        output_b64_images = []
-        for file_name in os.listdir(OUTPUT_DIR):
-            if file_name.endswith(".png") or file_name.endswith(".jpg"):
-                with open(os.path.join(OUTPUT_DIR, file_name), "rb") as f:
-                    output_b64_images.append({
-                        "name": file_name,
-                        "image": base64.b64encode(f.read()).decode("utf-8")
-                    })
-
-        return {"status": "success", "images": output_b64_images}
-        
-    except Exception as e:
-        return {"error": str(e)}
-
-runpod.serverless.start({"handler": handler})
+# 6. 핸들러 복사 및 실행
+COPY rp_handler.py /workspace/rp_handler.py
+CMD ["python", "rp_handler.py"]
