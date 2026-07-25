@@ -1,34 +1,29 @@
-name: Build and Push Docker Image
+name: Build and Push to GHCR
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # 깃허브 저장소에 쓸 수 있는 권한 부여
+
     steps:
-      - name: Checkout RunPod Official Source
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          repository: runpod-workers/worker-comfyui
 
-      - name: Inject rembg into Dockerfile
-        run: |
-          echo "" >> Dockerfile
-          echo "# --- Custom rembg Installation ---" >> Dockerfile
-          echo "RUN pip install --no-cache-dir rembg onnxruntime-gpu" >> Dockerfile
-
-      - name: Login to Docker Hub
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # 깃허브가 자체 발급하는 기본 토큰 (설정 불필요)
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/comfyui-rembg:v1
+          tags: ghcr.io/lunardash7/comfyui-rembg:v1
