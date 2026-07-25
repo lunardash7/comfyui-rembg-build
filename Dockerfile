@@ -17,6 +17,9 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu
 
+# ComfyUI용 Rembg 커스텀 노드 다운로드
+RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
+
 # 5. 방금 만든 서버리스 핸들러 파일을 컨테이너 안으로 복사
 COPY rp_handler.py /workspace/rp_handler.py
 
