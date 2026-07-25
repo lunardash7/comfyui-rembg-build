@@ -4,12 +4,25 @@ import requests
 import time
 import base64
 import os
+import shutil
 
 COMFY_DIR = "/workspace"
 INPUT_DIR = os.path.join(COMFY_DIR, "input")
 OUTPUT_DIR = os.path.join(COMFY_DIR, "output")
 
-# 1. ComfyUI 실행 시 터미널 에러 로그를 파일로 기록
+# 1. 런팟 네트워크 볼륨(/runpod-volume) 자동 감지 및 모델 폴더 연결(심볼릭 링크)
+RUNPOD_VOL = "/runpod-volume"
+if os.path.exists(RUNPOD_VOL):
+    vol_models = os.path.join(RUNPOD_VOL, "models")
+    comfy_models = os.path.join(COMFY_DIR, "models")
+    
+    if os.path.exists(vol_models):
+        if os.path.exists(comfy_models) and not os.path.islink(comfy_models):
+            shutil.rmtree(comfy_models)
+        if not os.path.exists(comfy_models):
+            os.symlink(vol_models, comfy_models)
+
+# 2. ComfyUI 백그라운드 실행 및 로그 기록
 out_log = open("comfy.log", "w")
 err_log = open("comfy_error.log", "w")
 
@@ -21,13 +34,10 @@ comfy_process = subprocess.Popen(
 )
 
 def handler(event):
-    # 2. ComfyUI가 실행 중 죽었다면 원인을 PHP로 즉시 반환
     if comfy_process.poll() is not None:
         with open("comfy_error.log", "r") as f:
-            error_details = f.read()
-        return {"error": "ComfyUI Server Crashed on Startup", "details": error_details}
+            return {"error": "ComfyUI Server Crashed", "details": f.read()}
 
-    # 3. 켜지는 데 오래 걸릴 수 있으므로 최대 120초 대기
     server_ready = False
     for _ in range(120):
         try:
@@ -39,18 +49,15 @@ def handler(event):
 
     if not server_ready:
         with open("comfy_error.log", "r") as f:
-            error_details = f.read()
-        return {"error": "ComfyUI Startup Timeout", "details": error_details}
+            return {"error": "ComfyUI Startup Timeout", "details": f.read()}
 
-    # 4. 이미지 및 워크플로우 처리
     job_input = event.get("input", {})
     workflow = job_input.get("workflow")
     if not workflow:
         return {"error": "No workflow provided in the input"}
 
     os.makedirs(INPUT_DIR, exist_ok=True)
-    input_images = job_input.get("images", [])
-    for img_data in input_images:
+    for img_data in job_input.get("images", []):
         name = img_data.get("name")
         b64 = img_data.get("image")
         if name and b64:
@@ -66,14 +73,21 @@ def handler(event):
     try:
         submit_res = requests.post("http://127.0.0.1:8188/prompt", json={"prompt": workflow}).json()
         
-        # 5. 모델이 없거나 노드가 없어서 발생한 ComfyUI 내부 에러 캡처
+        # 3. 모델/노드 누락으로 작업이 거부되었을 때, ComfyUI의 내부 로그를 긁어서 PHP로 반환!
         if "error" in submit_res:
-            return {"error": "ComfyUI rejected the workflow", "details": submit_res}
+            with open("comfy.log", "r") as f:
+                server_log = f.read()[-3000:] # 에러가 발생한 마지막 내역 읽기
+                
+            installed_nodes = os.listdir(os.path.join(COMFY_DIR, "custom_nodes"))
+            
+            return {
+                "error": "ComfyUI rejected the workflow", 
+                "details": submit_res,
+                "installed_nodes_check": installed_nodes, # 덮어쓰기 여부 확인용
+                "server_log": server_log # 노드 로드 실패의 진짜 원인
+            }
             
         prompt_id = submit_res.get("prompt_id")
-        if not prompt_id:
-            return {"error": "No prompt_id returned", "details": submit_res}
-
         while True:
             history_res = requests.get(f"http://127.0.0.1:8188/history/{prompt_id}").json()
             if prompt_id in history_res:
@@ -84,10 +98,9 @@ def handler(event):
         for file_name in os.listdir(OUTPUT_DIR):
             if file_name.endswith(".png") or file_name.endswith(".jpg"):
                 with open(os.path.join(OUTPUT_DIR, file_name), "rb") as f:
-                    out_b64 = base64.b64encode(f.read()).decode("utf-8")
                     output_b64_images.append({
                         "name": file_name,
-                        "image": out_b64
+                        "image": base64.b64encode(f.read()).decode("utf-8")
                     })
 
         return {"status": "success", "images": output_b64_images}
