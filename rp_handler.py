@@ -9,29 +9,45 @@ COMFY_DIR = "/workspace"
 INPUT_DIR = os.path.join(COMFY_DIR, "input")
 OUTPUT_DIR = os.path.join(COMFY_DIR, "output")
 
-# 1. 백그라운드에서 ComfyUI 실행
-subprocess.Popen(
+# 1. ComfyUI 실행 시 터미널 에러 로그를 파일로 기록
+out_log = open("comfy.log", "w")
+err_log = open("comfy_error.log", "w")
+
+comfy_process = subprocess.Popen(
     ["python", "main.py", "--port", "8188", "--listen", "0.0.0.0"],
-    cwd=COMFY_DIR
+    cwd=COMFY_DIR,
+    stdout=out_log,
+    stderr=err_log
 )
 
-# 2. 서버가 완전히 켜질 때까지 대기
-for _ in range(30):
-    try:
-        if requests.get("http://127.0.0.1:8188/").status_code == 200:
-            break
-    except:
-        time.sleep(1)
-
 def handler(event):
+    # 2. ComfyUI가 실행 중 죽었다면 원인을 PHP로 즉시 반환
+    if comfy_process.poll() is not None:
+        with open("comfy_error.log", "r") as f:
+            error_details = f.read()
+        return {"error": "ComfyUI Server Crashed on Startup", "details": error_details}
+
+    # 3. 켜지는 데 오래 걸릴 수 있으므로 최대 120초 대기
+    server_ready = False
+    for _ in range(120):
+        try:
+            if requests.get("http://127.0.0.1:8188/").status_code == 200:
+                server_ready = True
+                break
+        except:
+            time.sleep(1)
+
+    if not server_ready:
+        with open("comfy_error.log", "r") as f:
+            error_details = f.read()
+        return {"error": "ComfyUI Startup Timeout", "details": error_details}
+
+    # 4. 이미지 및 워크플로우 처리
     job_input = event.get("input", {})
-    
-    # PHP에서 'workflow'라는 키로 보낸 데이터 받기
     workflow = job_input.get("workflow")
     if not workflow:
         return {"error": "No workflow provided in the input"}
 
-    # 3. PHP에서 보낸 Base64 이미지 디코딩 및 input 폴더에 저장 (pose.png 등)
     os.makedirs(INPUT_DIR, exist_ok=True)
     input_images = job_input.get("images", [])
     for img_data in input_images:
@@ -41,7 +57,6 @@ def handler(event):
             with open(os.path.join(INPUT_DIR, name), "wb") as f:
                 f.write(base64.b64decode(b64))
 
-    # 4. 이전 작업 결과물 삭제 (출력 폴더 초기화)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     for f in os.listdir(OUTPUT_DIR):
         file_path = os.path.join(OUTPUT_DIR, f)
@@ -49,21 +64,22 @@ def handler(event):
             os.remove(file_path)
 
     try:
-        # 5. ComfyUI로 워크플로우 전송
         submit_res = requests.post("http://127.0.0.1:8188/prompt", json={"prompt": workflow}).json()
-        prompt_id = submit_res.get("prompt_id")
         
+        # 5. 모델이 없거나 노드가 없어서 발생한 ComfyUI 내부 에러 캡처
+        if "error" in submit_res:
+            return {"error": "ComfyUI rejected the workflow", "details": submit_res}
+            
+        prompt_id = submit_res.get("prompt_id")
         if not prompt_id:
-            return {"error": "ComfyUI prompt submission failed", "details": submit_res}
+            return {"error": "No prompt_id returned", "details": submit_res}
 
-        # 6. 작업이 끝날 때까지 대기 (history 폴링)
         while True:
             history_res = requests.get(f"http://127.0.0.1:8188/history/{prompt_id}").json()
             if prompt_id in history_res:
                 break
             time.sleep(1.5)
 
-        # 7. 완성된 이미지를 찾아 Base64로 인코딩하여 반환
         output_b64_images = []
         for file_name in os.listdir(OUTPUT_DIR):
             if file_name.endswith(".png") or file_name.endswith(".jpg"):
