@@ -10,7 +10,7 @@ COMFY_DIR = "/workspace"
 INPUT_DIR = os.path.join(COMFY_DIR, "input")
 OUTPUT_DIR = os.path.join(COMFY_DIR, "output")
 
-# 1. 런팟 네트워크 볼륨(/runpod-volume) 자동 감지 및 모델 폴더 연결(심볼릭 링크)
+# 네트워크 볼륨 마운트 로직 (정상 작동 확인됨)
 RUNPOD_VOL = "/runpod-volume"
 if os.path.exists(RUNPOD_VOL):
     vol_models = os.path.join(RUNPOD_VOL, "models")
@@ -22,20 +22,18 @@ if os.path.exists(RUNPOD_VOL):
         if not os.path.exists(comfy_models):
             os.symlink(vol_models, comfy_models)
 
-# 2. ComfyUI 백그라운드 실행 및 로그 기록
-out_log = open("comfy.log", "w")
-err_log = open("comfy_error.log", "w")
-
+# 로그 통합 및 실시간 출력 설정 (-u 옵션 및 stderr 통합)
+out_err_log = open("comfy_server.log", "w")
 comfy_process = subprocess.Popen(
-    ["python", "main.py", "--port", "8188", "--listen", "0.0.0.0"],
+    ["python", "-u", "main.py", "--port", "8188", "--listen", "0.0.0.0"],
     cwd=COMFY_DIR,
-    stdout=out_log,
-    stderr=err_log
+    stdout=out_err_log,
+    stderr=subprocess.STDOUT
 )
 
 def handler(event):
     if comfy_process.poll() is not None:
-        with open("comfy_error.log", "r") as f:
+        with open("comfy_server.log", "r") as f:
             return {"error": "ComfyUI Server Crashed", "details": f.read()}
 
     server_ready = False
@@ -48,7 +46,7 @@ def handler(event):
             time.sleep(1)
 
     if not server_ready:
-        with open("comfy_error.log", "r") as f:
+        with open("comfy_server.log", "r") as f:
             return {"error": "ComfyUI Startup Timeout", "details": f.read()}
 
     job_input = event.get("input", {})
@@ -73,18 +71,18 @@ def handler(event):
     try:
         submit_res = requests.post("http://127.0.0.1:8188/prompt", json={"prompt": workflow}).json()
         
-        # 3. 모델/노드 누락으로 작업이 거부되었을 때, ComfyUI의 내부 로그를 긁어서 PHP로 반환!
+        # 에러 발생 시 완벽한 로그 추출
         if "error" in submit_res:
-            with open("comfy.log", "r") as f:
-                server_log = f.read()[-3000:] # 에러가 발생한 마지막 내역 읽기
+            with open("comfy_server.log", "r") as f:
+                server_log = f.read()[-4000:]
                 
             installed_nodes = os.listdir(os.path.join(COMFY_DIR, "custom_nodes"))
             
             return {
                 "error": "ComfyUI rejected the workflow", 
                 "details": submit_res,
-                "installed_nodes_check": installed_nodes, # 덮어쓰기 여부 확인용
-                "server_log": server_log # 노드 로드 실패의 진짜 원인
+                "installed_nodes_check": installed_nodes,
+                "server_log": server_log
             }
             
         prompt_id = submit_res.get("prompt_id")
