@@ -23,46 +23,8 @@ RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu "numpy<2" o
 RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
 RUN cd /workspace/custom_nodes/rembg-comfyui-node && pip install --no-cache-dir -r requirements.txt || true
 
-RUN mkdir -p /workspace/custom_nodes
-
-RUN <<'EOF' > /workspace/custom_nodes/standalone_clipseg.py
-import torch
-import numpy as np
-from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-from PIL import Image
-
-class StandaloneCLIPSeg:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {"required": {"image": ("IMAGE",), "prompt": ("STRING", {"multiline": False, "default": "clothes"})}}
-    
-    RETURN_TYPES = ("MASK",)
-    FUNCTION = "segment"
-    CATEGORY = "mask"
-    
-    def __init__(self):
-        self.processor = None
-        self.model = None
-
-    def segment(self, image, prompt):
-        if self.processor is None:
-            self.processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-            self.model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
-        
-        i = 255. * image[0].cpu().numpy()
-        img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
-        
-        inputs = self.processor(text=[prompt], images=[img], padding="max_length", return_tensors="pt")
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        
-        mask = torch.sigmoid(outputs.logits).unsqueeze(0).unsqueeze(0)
-        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='bilinear').squeeze()
-        
-        return (mask.unsqueeze(0),)
-
-NODE_CLASS_MAPPINGS = {"CLIPSeg": StandaloneCLIPSeg}
-EOF
+RUN mkdir -p /workspace/custom_nodes && \
+    echo "aW1wb3J0IHRvcmNoCmltcG9ydCBudW1weSBhcyBucApmcm9tIHRyYW5zZm9ybWVycyBpbXBvcnQgQ0xJUFNlZ1Byb2Nlc3NvciwgQ0xJUFNlZ0ZvckltYWdlU2VnbWVudGF0aW9uCmZyb20gUElMIGltcG9ydCBJbWFnZQoKY2xhc3MgU3RhbmRhbG9uZUNMSVBTZWc6CiAgICBAY2xhc3NtZXRob2QKICAgIGRlZiBJTlBVVF9UWVBFUyhzKToKICAgICAgICByZXR1cm4geyJyZXF1aXJlZCI6IHsiaW1hZ2UiOiAoIklNQUdFIiwpLCAicHJvbXB0IjogKCJTVFJJTkciLCB7Im11bHRpbGluZSI6IEZhbHNlLCAiZGVmYXVsdCI6ICJjbG90aGVzIn0pfX0KCiAgICBSRVRVUk5fVFlQRVMgPSAoIk1BU0siLCkKICAgIEZVTkNUSU9OID0gInNlZ21lbnQiCiAgICBDQVRFR09SWSA9ICJtYXNrIgoKICAgIGRlZiBfX2luaXRfXyhzZWxmKToKICAgICAgICBzZWxmLnByb2Nlc3NvciA9IE5vbmUKICAgICAgICBzZWxmLm1vZGVsID0gTm9uZQoKICAgIGRlZiBzZWdtZW50KHNlbGYsIGltYWdlLCBwcm9tcHQpOgogICAgICAgIGlmIHNlbGYucHJvY2Vzc29yIGlzIE5vbmU6CiAgICAgICAgICAgIHNlbGYucHJvY2Vzc29yID0gQ0xJUFNlZ1Byb2Nlc3Nvci5mcm9tX3ByZXRyYWluZWQoIkNJREFTL2NsaXBzZWctcmQ2NC1yZWZpbmVkIikKICAgICAgICAgICAgc2VsZi5tb2RlbCA9IENMSVBTZWdGb3JJbWFnZVNlZ21lbnRhdGlvbi5mcm9tX3ByZXRyYWluZWQoIkNJREFTL2NsaXBzZWctcmQ2NC1yZWZpbmVkIikKCiAgICAgICAgaSA9IDI1NS4gKiBpbWFnZVswXS5jcHUoKS5udW1weSgpCiAgICAgICAgaW1nID0gSW1hZ2UuZnJvbWFycmF5KG5wLmNsaXAoaSwgMCwgMjU1KS5hc3R5cGUobnAudWludDgpKQoKICAgICAgICBpbnB1dHMgPSBzZWxmLnByb2Nlc3Nvcih0ZXh0PVtwcm9tcHRdLCBpbWFnZXM9W2ltZ10sIHBhZGRpbmc9Im1heF9sZW5ndGgiLCByZXR1cm5fdGVuc29ycz0icHQiKQogICAgICAgIHdpdGggdG9yY2gubm9fZ3JhZCgpOgogICAgICAgICAgICBvdXRwdXRzID0gc2VsZi5tb2RlbCgqKmlucHV0cykKCiAgICAgICAgbWFzayA9IHRvcmNoLnNpZ21vaWQob3V0cHV0cy5sb2dpdHMpLnVuc3F1ZWV6ZSgwKS51bnNxdWVlemUoMCkKICAgICAgICBtYXNrID0gdG9yY2gubm4uZnVuY3Rpb25hbC5pbnRlcnBvbGF0ZShtYXNrLCBzaXplPShpbWcuaGVpZ2h0LCBpbWcud2lkdGgpLCBtb2RlPSdiaWxpbmVhcicpLnNxdWVlemUoKQoKICAgICAgICByZXR1cm4gKG1hc2sudW5zcXVlZXplKDApLCkKCk5PREVfQ0xBU1NfTUFQUElOR1MgPSB7IkNMSVBTZWciOiBTdGFuZGFsb25lQ0xJUFNlZ30K" | base64 -d > /workspace/custom_nodes/standalone_clipseg.py
 
 COPY rp_handler.py /workspace/rp_handler.py
 CMD ["python", "rp_handler.py"]
