@@ -27,16 +27,7 @@ RUN python3 -c 'import os; code = "import torch\nimport numpy as np\nfrom transf
 
 COPY rp_handler.py /workspace/rp_handler.py
 
-# --- CLIPSeg 차원(Dimension) 버그 수정 자동 패치 ---
-RUN python3 -c "import os;\
-path = '/workspace/custom_nodes/standalone_clipseg.py';\
-if os.path.exists(path):\
-    with open(path, 'r') as f: data = f.read();\
-    old = 'mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode=\"bilinear\").squeeze()';\
-    new = 'mask = mask.unsqueeze(1)\\n        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode=\"bilinear\")\\n        mask = mask.squeeze(1)';\
-    data = data.replace(old, new);\
-    with open(path, 'w') as f: f.write(data);\
-    print('CLIPSeg patch applied successfully.')\
-"
+# --- CLIPSeg 차원(Dimension) 버그 수정 완벽 패치 ---
+RUN python3 -c "import os; p='/workspace/custom_nodes/standalone_clipseg.py'; d=open(p).read() if os.path.exists(p) else ''; o='mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='+chr(34)+'bilinear'+chr(34)+').squeeze()'; n='mask = mask.unsqueeze(1)'+chr(10)+'        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='+chr(34)+'bilinear'+chr(34)+')'+chr(10)+'        mask = mask.squeeze(1)'; open(p,'w').write(d.replace(o,n)) if d else None; print('CLIPSeg patch applied successfully.')"
 
 CMD ["python", "rp_handler.py"]
