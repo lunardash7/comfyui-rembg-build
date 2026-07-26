@@ -26,4 +26,17 @@ RUN cd /workspace/custom_nodes/rembg-comfyui-node && pip install --no-cache-dir 
 RUN python3 -c 'import os; code = "import torch\nimport numpy as np\nfrom transformers import CLIPSegProcessor, CLIPSegForImageSegmentation\nfrom PIL import Image\n\nclass StandaloneCLIPSeg:\n    @classmethod\n    def INPUT_TYPES(s):\n        return {\n            \"required\": {\"image\": (\"IMAGE\",)},\n            \"optional\": {\n                \"text\": (\"STRING\", {\"multiline\": False, \"default\": \"\"}),\n                \"prompt\": (\"STRING\", {\"multiline\": False, \"default\": \"\"}),\n                \"blur\": (\"FLOAT\", {\"default\": 3.0}),\n                \"threshold\": (\"FLOAT\", {\"default\": 0.4}),\n                \"dilation_factor\": (\"INT\", {\"default\": 4}),\n                \"dilation\": (\"INT\", {\"default\": 4})\n            }\n        }\n    \n    RETURN_TYPES = (\"MASK\", \"IMAGE\", \"MASK\")\n    RETURN_NAMES = (\"Mask\", \"Heatmap Mask\", \"BW Mask\")\n    FUNCTION = \"segment\"\n    CATEGORY = \"mask\"\n    \n    def __init__(self):\n        self.processor = None\n        self.model = None\n\n    def segment(self, image, text=\"\", prompt=\"\", **kwargs):\n        actual_prompt = text if text else prompt\n        if not actual_prompt:\n            actual_prompt = \"clothes\"\n        \n        if self.processor is None:\n            self.processor = CLIPSegProcessor.from_pretrained(\"CIDAS/clipseg-rd64-refined\")\n            self.model = CLIPSegForImageSegmentation.from_pretrained(\"CIDAS/clipseg-rd64-refined\")\n        \n        i = 255. * image[0].cpu().numpy()\n        img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))\n        \n        inputs = self.processor(text=[actual_prompt], images=[img], padding=\"max_length\", return_tensors=\"pt\")\n        with torch.no_grad():\n            outputs = self.model(**inputs)\n        \n        mask = torch.sigmoid(outputs.logits).unsqueeze(0).unsqueeze(0)\n        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode=\"bilinear\").squeeze()\n        mask_tensor = mask.unsqueeze(0)\n        return (mask_tensor, image, mask_tensor)\n\nNODE_CLASS_MAPPINGS = {\"CLIPSeg\": StandaloneCLIPSeg}\n"; open("/workspace/custom_nodes/standalone_clipseg.py", "w").write(code)'
 
 COPY rp_handler.py /workspace/rp_handler.py
+
+# --- CLIPSeg 차원(Dimension) 버그 수정 자동 패치 ---
+RUN python3 -c "import os;\
+path = '/workspace/custom_nodes/standalone_clipseg.py';\
+if os.path.exists(path):\
+    with open(path, 'r') as f: data = f.read();\
+    old = 'mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode=\"bilinear\").squeeze()';\
+    new = 'mask = mask.unsqueeze(1)\\n        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode=\"bilinear\")\\n        mask = mask.squeeze(1)';\
+    data = data.replace(old, new);\
+    with open(path, 'w') as f: f.write(data);\
+    print('CLIPSeg patch applied successfully.')\
+"
+
 CMD ["python", "rp_handler.py"]
