@@ -23,10 +23,9 @@ RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu "numpy<2" o
 RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
 RUN cd /workspace/custom_nodes/rembg-comfyui-node && pip install --no-cache-dir -r requirements.txt || true
 
-# [기존 time-river 레포지토리 설치 부분 전체 삭제 후 아래 코드로 교체]
-# 외부 의존성 없이 ComfyUI 내장 라이브러리로만 구동되는 독립형 CLIPSeg 노드 생성
-RUN mkdir -p /workspace/custom_nodes && \
-    cat << 'EOF' > /workspace/custom_nodes/standalone_clipseg.py
+RUN mkdir -p /workspace/custom_nodes
+
+RUN <<'EOF' > /workspace/custom_nodes/standalone_clipseg.py
 import torch
 import numpy as np
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
@@ -46,21 +45,17 @@ class StandaloneCLIPSeg:
         self.model = None
 
     def segment(self, image, prompt):
-        # 첫 실행 시에만 모델을 메모리에 로드 (부팅 속도 저하 방지)
         if self.processor is None:
             self.processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
             self.model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
         
-        # ComfyUI 텐서 [B, H, W, C] -> PIL 이미지 변환
         i = 255. * image[0].cpu().numpy()
         img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
         
-        # 최신 transformers 기반 추론
         inputs = self.processor(text=[prompt], images=[img], padding="max_length", return_tensors="pt")
         with torch.no_grad():
             outputs = self.model(**inputs)
         
-        # 마스크 리사이징 및 ComfyUI 규격 [B, H, W] 텐서로 변환
         mask = torch.sigmoid(outputs.logits).unsqueeze(0).unsqueeze(0)
         mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='bilinear').squeeze()
         
