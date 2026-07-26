@@ -23,12 +23,11 @@ RUN pip install --no-cache-dir runpod requests rembg onnxruntime-gpu "numpy<2" o
 RUN git clone https://github.com/Jcd1230/rembg-comfyui-node.git /workspace/custom_nodes/rembg-comfyui-node
 RUN cd /workspace/custom_nodes/rembg-comfyui-node && pip install --no-cache-dir -r requirements.txt || true
 
-# CLIPSeg 클론 후 requirements.txt에서 torch와 numpy 관련 항목을 제거하고 종속성 설치
+# CLIPSeg 클론 후 requirements.txt의 모든 버전 강제 제약(== 등)을 일괄 삭제하여 기존 최신 환경 훼손 원천 차단
 RUN cd /workspace/custom_nodes && \
     git clone https://github.com/time-river/ComfyUI-CLIPSeg.git && \
     cd ComfyUI-CLIPSeg && \
-    sed -i '/torch/d' requirements.txt && \
-    sed -i '/numpy/d' requirements.txt && \
+    sed -i 's/[=<>].*//g' requirements.txt && \
     pip install -r requirements.txt
 
 COPY rp_handler.py /workspace/rp_handler.py
