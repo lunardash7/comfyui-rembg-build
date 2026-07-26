@@ -30,4 +30,6 @@ COPY rp_handler.py /workspace/rp_handler.py
 # --- CLIPSeg 차원(Dimension) 버그 수정 완벽 패치 ---
 RUN python3 -c "import os; p='/workspace/custom_nodes/standalone_clipseg.py'; d=open(p).read() if os.path.exists(p) else ''; o='mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='+chr(34)+'bilinear'+chr(34)+').squeeze()'; n='mask = mask.unsqueeze(1)'+chr(10)+'        mask = torch.nn.functional.interpolate(mask, size=(img.height, img.width), mode='+chr(34)+'bilinear'+chr(34)+')'+chr(10)+'        mask = mask.squeeze(1)'; open(p,'w').write(d.replace(o,n)) if d else None; print('CLIPSeg patch applied successfully.')"
 
+COPY join_image_with_alpha.py /workspace/custom_nodes/join_image_with_alpha.py
+
 CMD ["python", "rp_handler.py"]
